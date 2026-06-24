@@ -1,11 +1,27 @@
-// /api/get.js — Accepts a question, stores it in Redis, returns a numeric ID (1, 2, 3...)
+// /api/get.js — Accepts a question, generates a numeric ID internally, calls Gemini, returns the ANSWER
 
+import { GoogleGenAI } from "@google/genai";
 import { Redis } from "@upstash/redis";
 
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
+
+// System prompts based on question type
+const SYSTEM_PROMPTS = {
+  code: `You are a coding assistant. The user will ask a programming question.
+Respond ONLY with the code solution. No explanations, no markdown fences, no comments unless they are part of the code.
+Just raw, clean, working code.`,
+
+  mcq: `You are an MCQ solver. The user will provide a multiple choice question.
+Respond ONLY with the correct option letter and the answer text, like:
+B) Answer text here
+Do not explain why. Just give the correct option.`,
+
+  default: `You are a helpful assistant. Answer the user's question concisely and directly in plain text. No markdown formatting.`,
+};
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -19,25 +35,43 @@ export default async function handler(req, res) {
       return;
     }
 
-    if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
-      res.status(500).send("Error: Redis is not configured on the server.");
+    if (!process.env.GEMINI_API_KEY) {
+      res.status(500).send("Error: GEMINI_API_KEY is not configured on the server.");
       return;
     }
 
-    // Increment the global counter to get the next ID (1, 2, 3, ...)
-    const id = await redis.incr("question_counter");
+    // Pick the right system prompt based on type
+    const type = (t || "default").toLowerCase().trim();
+    const systemInstruction = SYSTEM_PROMPTS[type] || SYSTEM_PROMPTS.default;
 
-    // Store the question data under this ID
+    // Call Gemini
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: q,
+      config: {
+        systemInstruction: systemInstruction,
+        temperature: 0.2,
+      },
+    });
+
+    const answer = response.text ?? "No response generated.";
+
+    // Generate a numeric ID and store the question + answer in Redis (for later retrieval via /answer)
+    const id = await redis.incr("question_counter");
     await redis.set(`question:${id}`, JSON.stringify({
       q: q,
-      t: t || "default",
+      t: type,
+      answer: answer,
       ts: Date.now(),
     }));
 
-    // Return just the numeric ID
-    res.status(200).send(String(id));
+    // Set the ID in a response header (so it can be read if needed)
+    res.setHeader("X-Question-Id", String(id));
+
+    // Return the ANSWER directly (not the ID)
+    res.status(200).send(answer);
   } catch (error) {
-    console.error("Error generating ID:", error);
-    res.status(500).send("Error: Failed to generate ID. " + (error.message || ""));
+    console.error("Gemini API Error:", error);
+    res.status(500).send("Error: Failed to generate response. " + (error.message || ""));
   }
 }
