@@ -1,0 +1,13 @@
+{
+  "name": "gemini-vercel-backend",
+  "version": "1.0.0",
+  "description": "Vercel serverless backend connecting to Google Gemini API",
+  "type": "module",
+  "main": "api/get.js",
+  "scripts": {
+    "start": "vercel dev"
+  },
+  "dependencies": {
+    "@google/genai": "^2.10.0"
+  }
+}
