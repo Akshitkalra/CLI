@@ -1,4 +1,11 @@
-// /api/get.js — Accepts a question, returns a unique ID
+// /api/get.js — Accepts a question, stores it in Redis, returns a numeric ID (1, 2, 3...)
+
+import { Redis } from "@upstash/redis";
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -12,20 +19,25 @@ export default async function handler(req, res) {
       return;
     }
 
-    // Build a payload with the question, type, and timestamp
-    const payload = JSON.stringify({
+    if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+      res.status(500).send("Error: Redis is not configured on the server.");
+      return;
+    }
+
+    // Increment the global counter to get the next ID (1, 2, 3, ...)
+    const id = await redis.incr("question_counter");
+
+    // Store the question data under this ID
+    await redis.set(`question:${id}`, JSON.stringify({
       q: q,
       t: t || "default",
       ts: Date.now(),
-    });
+    }));
 
-    // Encode it as a base64url ID
-    const id = Buffer.from(payload).toString("base64url");
-
-    // Return just the ID
-    res.status(200).send(id);
+    // Return just the numeric ID
+    res.status(200).send(String(id));
   } catch (error) {
     console.error("Error generating ID:", error);
-    res.status(500).send("Error: Failed to generate ID.");
+    res.status(500).send("Error: Failed to generate ID. " + (error.message || ""));
   }
 }

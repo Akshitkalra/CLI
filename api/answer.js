@@ -1,8 +1,13 @@
-// /api/answer.js — Decodes the ID, sends question to Gemini, returns the answer
+// /api/answer.js — Fetches question from Redis by numeric ID, sends to Gemini, returns answer
 
 import { GoogleGenAI } from "@google/genai";
+import { Redis } from "@upstash/redis";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
 // System prompts based on question type
 const SYSTEM_PROMPTS = {
@@ -35,21 +40,21 @@ export default async function handler(req, res) {
       return;
     }
 
-    // Decode the ID back into the question and type
-    let payload;
-    try {
-      const decoded = Buffer.from(id, "base64url").toString("utf-8");
-      payload = JSON.parse(decoded);
-    } catch (e) {
-      res.status(400).send("Error: Invalid ID. Please generate a new one using /xxx/get?q=your-question&t=code");
+    // Fetch the stored question data from Redis
+    const data = await redis.get(`question:${id}`);
+
+    if (!data) {
+      res.status(404).send("Error: ID " + id + " not found. It may have expired or never existed.");
       return;
     }
 
+    // Parse the stored data
+    const payload = typeof data === "string" ? JSON.parse(data) : data;
     const { q, t } = payload;
     const type = (t || "default").toLowerCase().trim();
     const systemInstruction = SYSTEM_PROMPTS[type] || SYSTEM_PROMPTS.default;
 
-    // Call Gemini with the decoded question
+    // Call Gemini with the question
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: q,
